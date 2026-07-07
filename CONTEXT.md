@@ -52,7 +52,9 @@ model, add new formatting rules, etc.).
 
 ## Status
 
-This repository currently holds the concept/spec only. Implementation has not started yet.
+This repository holds the concept/spec (this file) and a detailed implementation roadmap in
+**[BUILD_PLAN.md](./BUILD_PLAN.md)**. Implementation has not started yet — the build plan is
+written so a fresh engineering thread can begin from Phase 0.
 
 ## License
 

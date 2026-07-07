@@ -8,6 +8,8 @@
   A free, open-source, fully local dictation app for Windows.
 </p>
 
-See [CONTEXT.md](./CONTEXT.md) for the full concept and spec.
+- **[CONTEXT.md](./CONTEXT.md)** — the product concept and spec.
+- **[BUILD_PLAN.md](./BUILD_PLAN.md)** — the detailed, phased implementation roadmap (stack,
+  architecture, milestones, gotchas). Start here to build it.
 
-**Status:** concept/spec only — implementation has not started yet.
+**Status:** planning stage — spec and build plan are written; implementation has not started yet.
