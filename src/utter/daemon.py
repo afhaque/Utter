@@ -129,6 +129,9 @@ class Daemon:
                 log.error("rejected hotkey %r: %s — keeping %r",
                           cfg.general.hotkey, exc, old_hotkey)
                 cfg.general.hotkey = old_hotkey
+        from utter.startup import sync_launch_on_startup
+
+        cfg = sync_launch_on_startup(cfg)  # TUI startup switch takes effect without restart
         self.cfg = cfg  # formatter/injector read this live — nothing else to plumb
         self.pipeline.cfg = cfg
         self.publish_status()

@@ -5,13 +5,12 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-import sys
 
 import pystray
 from PIL import Image, ImageDraw
 
 from utter.daemon import Daemon
-from utter.paths import config_path
+from utter.paths import cli_command, config_path
 
 log = logging.getLogger(__name__)
 
@@ -49,14 +48,7 @@ class Tray:
         self.daemon.set_paused(not self.daemon.paused)
 
     def _open_dashboard(self, _icon, _item) -> None:
-        if getattr(sys, "frozen", False):
-            # packaged: the console CLI exe sits next to the windowless daemon exe
-            from pathlib import Path
-
-            cmd = [str(Path(sys.executable).with_name("utter.exe")), "dashboard"]
-        else:
-            cmd = [sys.executable, "-m", "utter", "dashboard"]
-        subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE)
+        subprocess.Popen(cli_command("dashboard"), creationflags=subprocess.CREATE_NEW_CONSOLE)
         log.info("dashboard launched")
 
     def _open_settings(self, _icon, _item) -> None:

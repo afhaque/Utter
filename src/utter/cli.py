@@ -78,9 +78,11 @@ def dictate(
     try:
         pipeline.load()
     except Exception as exc:
+        from utter.core.config import MODEL_SIZES
+
         typer.echo(
             f"Could not load model {cfg.model.name!r}: {exc}\n"
-            "Check the model name (tiny/base/small/medium/large-v3), your internet "
+            f"Check the model name ({'/'.join(MODEL_SIZES)}), your internet "
             "connection for a first-time download, and see README troubleshooting.",
             err=True,
         )
@@ -138,7 +140,7 @@ def dashboard() -> None:
 def _first_run_wizard() -> None:
     """Short terminal setup on first launch (BUILD_PLAN §8 first-run flow)."""
     from utter.core import config as config_store
-    from utter.core.config import Config
+    from utter.core.config import MODEL_SIZES, Config
     from utter.hotkey import parse_combo
     from utter.paths import config_path
 
@@ -156,8 +158,7 @@ def _first_run_wizard() -> None:
 
     cfg.model.name = _clean(
         typer.prompt(
-            "Model size (tiny/base/small/medium/large-v3; larger = more accurate,"
-            " bigger download)",
+            f"Model size ({'/'.join(MODEL_SIZES)}; larger = more accurate, bigger download)",
             default=cfg.model.name,
         )
     )

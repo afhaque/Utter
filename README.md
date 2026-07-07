@@ -36,7 +36,8 @@ No telemetry, no cloud, no account. History is a local SQLite file you can disab
    from a release, and put it anywhere (e.g. `C:\Tools\utter`).
 2. Run **`utterd.exe`** — the daemon appears in the system tray. First run writes a
    default config and downloads model weights from Hugging Face (~3 GB for the default
-   `large-v3`; see the model table below), showing progress in the log.
+   `large-v3`; see the model table below). The log file notes when the download starts —
+   give it a few minutes; it only happens once per model.
 3. **SmartScreen note:** the exe is not code-signed (v1), so Windows may show
    "Windows protected your PC" — click **More info → Run anyway**.
 
@@ -111,8 +112,9 @@ rule-based formatter — a paste is never blocked.
   (`%APPDATA%\Utter\logs\utter.log`) will say so.
 - **No microphone found:** run `utter devices` and set `[audio] input_device` to one of
   the listed names/indexes.
-- **First run looks hung:** it's probably downloading gigabytes of weights — watch the
-  log file. Weights cache under `%USERPROFILE%\.cache\huggingface`.
+- **First run looks hung:** it's probably downloading gigabytes of weights — the log
+  file (`%APPDATA%\Utter\logs\utter.log`) says when a download began. Weights cache
+  under `%USERPROFILE%\.cache\huggingface`.
 - **Dashboard says "stale — daemon may have crashed":** the daemon stopped without
   cleanup; restart `utterd.exe` and check the log.
 
@@ -125,7 +127,7 @@ $env:UTTER_CPU_ONLY = "1"
 .venv\Scripts\pyinstaller packaging\utter.spec --noconfirm          # CPU bundle -> dist\utter-cpu
 ```
 
-The GPU bundle is large (≈2.5 GB) because it ships the CUDA math libraries; model
+The GPU bundle is large (≈2 GB) because it ships the CUDA math libraries; model
 weights are **not** bundled and download on first run. `packaging/installer.iss` is an
 optional Inno Setup script for a Start-menu installer.
 

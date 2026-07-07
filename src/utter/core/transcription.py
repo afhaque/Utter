@@ -17,6 +17,20 @@ from utter.core.recorder import AudioClip, silence_clip
 log = logging.getLogger(__name__)
 
 
+def _weights_cached(model: str) -> bool:
+    """Best-effort check whether a standard Whisper size is already in the HF cache."""
+    import os
+    from pathlib import Path
+
+    if os.path.isdir(model):  # local model path — nothing to download
+        return True
+    cache = Path(
+        os.environ.get("HF_HUB_CACHE")
+        or Path(os.environ.get("HF_HOME") or Path.home() / ".cache" / "huggingface") / "hub"
+    )
+    return (cache / f"models--Systran--faster-whisper-{model}").is_dir()
+
+
 @dataclass
 class Transcript:
     text: str
@@ -51,6 +65,14 @@ class FasterWhisperService:
         gpu.register_dlls()  # before any ctranslate2 touch (§12.1)
         from faster_whisper import WhisperModel
 
+        if not _weights_cached(model):
+            # §12.6: first run downloads gigabytes — say so instead of silently hanging
+            # (faster-whisper deliberately disables its tqdm progress bars)
+            log.info(
+                "model weights for %r not cached — downloading from Hugging Face now; "
+                "this can take several minutes (~3 GB for large-v3) and only happens once",
+                model,
+            )
         actual = gpu.resolve_device(device)
         if actual == "cpu" and compute_type in ("float16", "int8_float16"):
             compute_type = "int8"  # float16 unsupported on CPU

@@ -21,15 +21,14 @@ bundle_name = "utter-cpu" if cpu_only else "utter"
 here = Path(SPECPATH)  # packaging/
 icon = str(here / "utter.ico")
 
-binaries = list(collect_dynamic_libs("ctranslate2"))
-if cpu_only:
-    # the ctranslate2 wheel bundles its own cudnn copy — strip every CUDA-family
-    # DLL so the CPU variant is genuinely NVIDIA-free
-    _cuda_prefixes = ("cudnn", "cublas", "cudart", "nvblas", "nvrtc")
-    binaries = [
-        (src, dest) for src, dest in binaries
-        if not Path(src).name.lower().startswith(_cuda_prefixes)
-    ]
+# the ctranslate2 wheel bundles its own (potentially version-skewed) cudnn copy —
+# strip CUDA-family DLLs from it in BOTH variants; the GPU bundle gets the single
+# pinned set under _internal/nvidia/*/bin instead
+_cuda_prefixes = ("cudnn", "cublas", "cudart", "nvblas", "nvrtc")
+binaries = [
+    (src, dest) for src, dest in collect_dynamic_libs("ctranslate2")
+    if not Path(src).name.lower().startswith(_cuda_prefixes)
+]
 if not cpu_only:
     # cuBLAS + cuDNN into _internal/nvidia/<pkg>/bin — exactly where utter.gpu's
     # frozen branch looks (§12.1). The FULL set matters: cublasLt64_12.dll fails
@@ -51,6 +50,7 @@ datas = (
 )
 
 hiddenimports = ["onnxruntime"]  # faster_whisper imports it lazily for VAD
+excludes = ["pytest", "_pytest", "pluggy", "setuptools", "pip"]  # no test frameworks in a user app
 
 a_cli = Analysis(
     [str(here / "launch_utter.py")],
@@ -58,6 +58,7 @@ a_cli = Analysis(
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
+    excludes=excludes,
     noarchive=False,
 )
 pyz_cli = PYZ(a_cli.pure)
@@ -78,6 +79,7 @@ a_daemon = Analysis(
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
+    excludes=excludes,
     noarchive=False,
 )
 pyz_daemon = PYZ(a_daemon.pure)
