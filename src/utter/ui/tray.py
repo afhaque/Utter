@@ -16,7 +16,20 @@ log = logging.getLogger(__name__)
 
 
 def _icon_image(size: int = 64) -> Image.Image:
-    """A simple mic glyph — round head + stem on a dark rounded square."""
+    """The otter logo, center-cropped square; falls back to a drawn mic glyph."""
+    try:
+        from importlib import resources
+
+        with resources.files("utter").joinpath("assets/logo.jpg").open("rb") as f:
+            img = Image.open(f).convert("RGBA")
+        side = min(img.size)
+        left = (img.width - side) // 2
+        top = (img.height - side) // 2
+        return img.crop((left, top, left + side, top + side)).resize(
+            (size, size), Image.LANCZOS
+        )
+    except Exception:
+        log.warning("logo asset unavailable — using drawn mic glyph")
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     d.rounded_rectangle((2, 2, size - 2, size - 2), radius=14, fill=(22, 22, 30, 255))

@@ -4,7 +4,9 @@
 > fresh Claude (or human) engineering thread with **no prior context** beyond this repo. Read
 > [CONTEXT.md](./CONTEXT.md) first for the product concept; this file covers *how* to build it.
 >
-> **Status:** planning artifact. No application code exists yet. Phase 0 is the starting line.
+> **Status:** executed — all phases (0–8) are implemented in this repo. Kept as the
+> historical roadmap; where implementation deviated (e.g. Win32 RegisterHotKey instead of
+> pynput GlobalHotKeys), the code and README are authoritative.
 
 ---
 

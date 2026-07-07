@@ -52,9 +52,10 @@ model, add new formatting rules, etc.).
 
 ## Status
 
-This repository holds the concept/spec (this file) and a detailed implementation roadmap in
-**[BUILD_PLAN.md](./BUILD_PLAN.md)**. Implementation has not started yet — the build plan is
-written so a fresh engineering thread can begin from Phase 0.
+**Implemented.** All phases of **[BUILD_PLAN.md](./BUILD_PLAN.md)** (0–8) are built: the
+working app lives in `src/utter`, packaged Windows bundles build from
+`packaging/utter.spec`, and the **[README](./README.md)** covers install and usage. This
+file remains as the original product concept/spec.
 
 ## License
 

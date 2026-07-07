@@ -63,8 +63,8 @@ make modern (Blackwell) GPUs work — don't upgrade them casually.
 |---|---|
 | Start dictation | press **Ctrl+Alt+Space** (configurable) — an overlay animates while recording |
 | Finish + paste | press the hotkey again — text lands in the focused app |
-| Pause / resume | tray icon → *Pause dictation* |
-| Dashboard & settings | tray icon → *Open Dashboard*, or `utter dashboard` |
+| Pause / resume | right-click the otter tray icon → *Pause dictation* |
+| Dashboard & settings | right-click the otter tray icon → *Open Dashboard*, or `utter dashboard` |
 | One-off headless dictation | `utter dictate` (add `--device cpu` or `--model small` to experiment) |
 
 The hotkey is a **toggle**: tap to start, tap to stop. Accidental double-taps are

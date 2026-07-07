@@ -14,7 +14,11 @@ import importlib.util
 import os
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+from PyInstaller.utils.hooks import (
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+)
 
 cpu_only = os.environ.get("UTTER_CPU_ONLY") == "1"
 bundle_name = "utter-cpu" if cpu_only else "utter"
@@ -47,9 +51,13 @@ if not cpu_only:
 datas = (
     collect_data_files("faster_whisper")  # Silero VAD onnx assets
     + collect_data_files("textual")       # TUI css
+    + [(str(here.parent / "src" / "utter" / "assets" / "logo.jpg"), "utter/assets")]
 )
 
-hiddenimports = ["onnxruntime"]  # faster_whisper imports it lazily for VAD
+# onnxruntime: faster_whisper imports it lazily for VAD.
+# textual: widgets are lazy-loaded via __getattr__/import_module — static analysis
+# misses them (packaged `utter dashboard` died on textual.widgets._tab_pane).
+hiddenimports = ["onnxruntime"] + collect_submodules("textual")
 excludes = ["pytest", "_pytest", "pluggy", "setuptools", "pip"]  # no test frameworks in a user app
 
 a_cli = Analysis(

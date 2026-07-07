@@ -36,6 +36,9 @@ utter = "utter.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+utter = ["assets/*"]
+
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
