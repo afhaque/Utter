@@ -64,6 +64,22 @@ library. Therefore: **single-language Python.**
 | Packaging | **PyInstaller** (onedir) | Produces a runnable Windows folder/exe; onedir handles the large NVIDIA DLLs better than onefile (§11). |
 | Lint/format/test | **ruff** + **pytest** | Fast, standard. |
 
+### 2.1 Pinned versions (these exact versions were verified working this session)
+
+The RTX 5060 Ti is **Blackwell (sm_120)**. This requires a CTranslate2 built against CUDA 12.8 /
+cuDNN 9 — an older CTranslate2 will load the DLLs fine but then throw `no kernel image is available
+for execution on the device` on sm_120. Do **not** `pip install` latest-of-everything blindly. Pin:
+
+```
+faster-whisper == 1.2.1
+ctranslate2    == 4.8.1          # CUDA 12.8 / cuDNN 9 build — required for Blackwell sm_120
+nvidia-cublas-cu12 == 12.9.2.10
+nvidia-cudnn-cu12  == 9.24.0.43
+```
+
+(These are the versions that transcribed correctly on the target machine this session. Bump only
+deliberately, and re-test on the Blackwell GPU when you do.)
+
 ---
 
 ## 3. High-level architecture
@@ -110,6 +126,40 @@ library. Therefore: **single-language Python.**
   first implementation. A future `whisper.cpp` or cloud-optional backend slots in behind it. Same
   for `FormattingService`.
 
+### 3.1 Concurrency & process model (decide this in Phase 0 — do NOT wing it)
+
+This is the single most likely integration wall. Multiple things want the main thread on Windows:
+pystray runs its own Win32 message loop, Tkinter requires all GUI calls on the thread that created
+the root and wants its own `mainloop()`, faster-whisper blocks, and pynput/sounddevice run their
+own callback threads. **You cannot naively call `tray.run()` and `root.mainloop()` in one process.**
+
+Mandated model for v1:
+- **Two processes, not one.**
+  - **`utterd` (the daemon):** owns the hotkey listener, recorder, transcription, formatting,
+    injector, overlay, and tray. This is what `utter start` launches (windowless in the packaged
+    build).
+  - **`utter dashboard` (the TUI):** a **separate** console process (Textual needs a real tty; a
+    windowless daemon has none). Launched on demand from the tray menu or CLI.
+- **Inside the daemon:**
+  - **pystray owns the main thread** (`icon.run()` on main). 
+  - **The Tkinter overlay runs on its own dedicated thread** with its own root + `mainloop()`;
+    all overlay updates from other threads are marshaled via `root.after(0, ...)`. (Tkinter tolerates
+    a non-main thread as long as *one* thread exclusively owns the root and everyone else posts to it.)
+  - **Hotkey callback offloads work:** the pynput callback must return fast — it enqueues a
+    start/stop event; a dedicated **worker thread** runs the blocking record→transcribe→format→inject
+    chain so the listener and tray never freeze.
+- **Daemon ↔ TUI communication (no live in-memory sharing across processes):**
+  - Settings: the TUI writes `config.toml`; the daemon **watches the file** (mtime poll or
+    `watchdog`) and hot-reloads (re-registers the hotkey, reloads prefs) on change.
+  - Status/history: the daemon writes live status (active model, device, VRAM, last-N transcripts)
+    to `history.db` / a small `status.json`; the TUI Dashboard **polls** it. No socket needed for v1.
+- **Single-instance guard:** the daemon must refuse to start twice (a named mutex / lockfile in
+  `%APPDATA%\Utter`) — two daemons would both grab the global hotkey and fight over the mic.
+
+If the no-focus-steal overlay (see §7/§12) proves too fragile in Tkinter, **PySide6 is the
+sanctioned upgrade** — it has first-class frameless/no-activate window support and a cleaner
+threading story via its own event loop. Treat that as a Phase-3 escape hatch, not a v1 default.
+
 ---
 
 ## 4. Component contracts (interfaces the thread should implement)
@@ -152,6 +202,10 @@ hotkey = "ctrl+alt+space"          # toggle record start/stop
 launch_on_startup = false
 overlay = true
 
+[audio]
+input_device = "default"           # name/index of mic; multi-mic machines must be able to pick
+sample_rate = 16000                # Whisper-native; capture mono float32
+
 [model]
 engine = "faster-whisper"
 name = "large-v3"                  # tiny|base|small|medium|large-v3 (or a local path)
@@ -171,7 +225,9 @@ custom_replacements = []           # [["gonna","going to"], ...]
 enabled = false                    # optional LLM cleanup pass
 provider = "ollama"
 base_url = "http://localhost:11434"
-model = "qwen3.6"
+model = "qwen3.6"                  # verified pulled locally this session (ollama list → qwen3.6:latest, 23GB)
+disable_thinking = true            # qwen3.6 is a hybrid-THINKING model — see §6, must suppress <think>
+timeout_seconds = 8                # generous: thinking models are slower; fall back to tier-1 on timeout
 # freeform instruction injected into the LLM prompt — this is the user's "context on how
 # they want text formatted", e.g. "Format as terse Slack messages, no capital letters."
 instruction = ""
@@ -198,8 +254,18 @@ Text: {tier1_text}
 Return only the reformatted text.
 ```
 
-Keep a hard timeout (e.g. 3 s) and fall back to tier-1 text on any error/timeout — the LLM pass
-must never block a paste. This is where "add context on how they want the text formatted" lives.
+**Critical — qwen3.6 is a hybrid *thinking* model.** By default it emits a `<think>…</think>`
+reasoning block, which would corrupt the pasted text and blow the timeout while it "thinks". You
+MUST suppress it: send `"think": false` in the Ollama request options (and/or prepend `/no_think`),
+AND defensively strip any residual `<think>…</think>` block from the response before use. Use a
+generous timeout (~8 s, not 3 s — thinking-class models are slower even with thinking off) and fall
+back to tier-1 text on any error/timeout — the LLM pass must never block a paste. This is where
+"add context on how they want the text formatted" lives.
+
+> Note for the builder: `qwen3.6` is a real, locally-available Ollama tag on the target machine
+> (confirmed this session via `ollama list`). If you're working from older training data that says
+> it doesn't exist, trust the live `ollama list` output, not your prior. Any recent local model
+> works here — it's an optional, swappable tier.
 
 ---
 
@@ -207,7 +273,12 @@ must never block a paste. This is where "add context on how they want the text f
 
 Default path: save current clipboard → set clipboard to final text → send `Ctrl+V` via `pynput`
 → restore original clipboard after a short delay. **Gotchas to handle:**
-- Restore the user's prior clipboard contents (don't clobber it).
+- Restore the user's prior clipboard contents (don't clobber it). Note: `pyperclip` is **text-only**
+  — it will destroy non-text clipboard contents (a copied image/file) on restore. If that matters,
+  use `win32clipboard` to save/restore all formats; otherwise document the limitation.
+- **Modifier bleed:** the toggle hotkey is `ctrl+alt+space`; if `alt` is still physically held when
+  you send `Ctrl+V`, the target receives `Ctrl+Alt+V`. Before injecting, wait for/force-release the
+  modifier keys (poll key state, or send explicit key-up) so the paste is a clean `Ctrl+V`.
 - Some apps swallow synthetic `Ctrl+V`. Provide a config toggle for a **`SendInput` Unicode
   injection** fallback (Win32 `KEYEVENTF_UNICODE`) that types the characters directly.
 - Add a small configurable delay before paste so the target window regains focus after the
@@ -224,7 +295,10 @@ overlay fades out. Total post-speech latency target: **< 1.5 s** for `small`, **
 
 **First-run flow:** on first `utter start`, if no config exists → run a short setup wizard in the
 terminal (pick model size with a download-size hint, pick device, set hotkey), write config,
-trigger the first model download with a progress indicator, then go to tray.
+trigger the first model download with a progress indicator, then go to tray. Note: surfacing HF
+download progress into the TUI is non-trivial — `huggingface_hub` drives `tqdm`; either hook its
+progress callback into a Textual progress bar or shell out and parse, but don't leave the first-run
+looking hung during a multi-GB pull.
 
 **Tray menu:** Start/Pause dictation · Open Dashboard (launches the Textual UI) · Settings ·
 Quit.
@@ -282,17 +356,24 @@ Utter/
 
 ## 10. Performance / latency targets
 
-| Model | VRAM (approx) | Target post-speech latency (16GB GPU) | Use |
+| Model | VRAM (rough, incl. runtime) | Provisional target post-speech latency (16GB GPU) | Use |
 |---|---|---|---|
-| `small` | ~1–2 GB | < 1 s | fast, casual dictation |
-| `medium` | ~2–3 GB | ~1–2 s | balanced |
-| `large-v3` | ~3 GB | ~2–3 s | max accuracy (default recommendation) |
+| `small` | ~0.5–1 GB | sub-second (once warm) | fast, casual dictation |
+| `medium` | ~1.5–2.5 GB | ~1–2 s | balanced |
+| `large-v3` | ~4–5 GB (weights ~3 GB + beam-search buffers) | ~2–3 s | max accuracy (default recommendation) |
 
-Keep the model **loaded in memory** in the background process — pay the multi-second load cost
-once at startup, never per-dictation. Use `beam_size` and model size as the primary speed knobs.
-(This session's cold test measured 3.3 s load + 9.3 s for a 10 s clip using `large-v3`,
-`beam_size=5`, model loaded cold — representative of the *wrong* way; the persistent-load hot path
-is far faster.)
+These targets are **provisional and MUST be re-measured** — do not treat them as verified. Two rules:
+- **Keep the model loaded in memory** in the daemon — pay the multi-second load cost once at
+  startup, never per-dictation.
+- **Do a warmup inference at startup** (transcribe a fraction of a second of silence right after
+  loading). ⚠️ Important correction to earlier session data: a cold first-call measured **3.3 s
+  load + 9.3 s to transcribe a 10 s clip** on `large-v3`/`beam_size=5`. Keeping the model resident
+  removes the **3.3 s load, NOT the 9.3 s compute** — transcription time is independent of load. The
+  9.3 s was almost certainly first-call CUDA/cuDNN kernel JIT + lazy-load warmup, which is exactly
+  what the startup warmup pass amortizes. **Phase 1 must measure the *warm* per-clip compute time and
+  the targets above must be confirmed or corrected against it** before the §8 UX latency promise is
+  made. If warm `large-v3` compute is still ~1× realtime, drop the default to `small`/`medium`.
+- Primary speed knobs: model size, then `beam_size`.
 
 ---
 
@@ -300,27 +381,48 @@ is far faster.)
 
 - **PyInstaller onedir** (`--onedir`, not `--onefile`). Onefile unpacks to a temp dir every launch
   — slow and fragile with the large NVIDIA CUDA DLLs. Onedir ships a folder that launches fast.
+- **PyInstaller ≥6 puts bundled binaries in an `_internal/` subfolder, not next to the exe.** The
+  `gpu.py` DLL shim MUST be layout-aware (see §12.1): in a frozen build it points the CUDA DLL search
+  at `_internal/` (via `sys._MEIPASS`), in dev it points at site-packages `nvidia/*/bin`. Getting
+  this wrong means CUDA loads in dev and silently fails on the packaged exe — bridge Phase 1's shim
+  to Phase 7 explicitly or the "runs on a clean machine" acceptance fails.
 - Explicitly collect the CTranslate2 + `nvidia-cublas-cu12` + `nvidia-cudnn-cu12` binaries into
-  the bundle (hidden imports / `--collect-binaries`); verify `cublas64_12.dll` and `cudnn*64_9.dll`
-  land next to the exe.
+  the bundle (`--collect-binaries` / hidden imports). Verify **all** required DLLs land, not just
+  the headline one: `cublas64_12.dll` **and** `cublasLt64_12.dll`, plus the `cudnn*64_9.dll` set
+  (note `cudnn_engines_precompiled64_9.dll` is very large).
+- **Reality check on size:** the CUDA + cuDNN DLL set makes the onedir bundle roughly **2–3 GB**.
+  That's before model weights. Plan the installer/download UX around that — it is not a small app.
 - **Do NOT bundle Whisper model weights.** They download from Hugging Face to the user's cache on
   first run. Bundling would bloat the installer by gigabytes and break model switching.
 - Optional: wrap the onedir output in an **Inno Setup** installer (`packaging/installer.iss`) for a
   Start-menu shortcut and optional "launch on startup".
-- Ship a CPU-only build variant too (smaller, no NVIDIA DLLs) for machines without CUDA.
+- **Code signing:** an unsigned PyInstaller exe will trip Windows SmartScreen / AV on first run —
+  which will fail a naive "runs on a clean machine" test. Either sign the binary or explicitly
+  document the SmartScreen "More info → Run anyway" step for v1.
+- Ship a CPU-only build variant too (much smaller, no NVIDIA DLLs) for machines without CUDA.
 
 ---
 
 ## 12. Gotchas (read before coding — learned the hard way this session)
 
-1. **cuBLAS/cuDNN DLLs must be on PATH before importing/using faster-whisper on CUDA.** The pip
-   `ctranslate2` wheel does **not** bundle them. Symptom: `RuntimeError: Library cublas64_12.dll
-   is not found or cannot be loaded`. **Fix that works on Windows:** `pip install nvidia-cublas-cu12
-   nvidia-cudnn-cu12`, then at startup prepend their `bin` dirs to `os.environ["PATH"]` (the
-   `nvidia/cublas/bin` and `nvidia/cudnn/bin` folders under site-packages). Note: `os.add_dll_directory()`
-   alone did **not** reliably work for this loader on the target machine — mutating `PATH` did.
-   Put this shim in `gpu.py` and call it before any transcription import. This is non-negotiable
-   and the #1 time-sink if missed.
+1. **cuBLAS/cuDNN DLLs must be resolvable before faster-whisper touches CUDA — this is the #1
+   time-sink.** The pip `ctranslate2` wheel does **not** bundle them. Symptom: `RuntimeError:
+   Library cublas64_12.dll is not found or cannot be loaded`. Install them as wheels (`pip install
+   nvidia-cublas-cu12 nvidia-cudnn-cu12`) and make `gpu.py` register their location **before any
+   transcription import**, in this order of robustness:
+   1. **Most robust — copy the DLLs next to the CTranslate2 `.pyd`** (or into the frozen bundle dir)
+      so the OS resolves them by the default same-directory search. This is the recommended primary,
+      and it's what the packaged build needs anyway.
+   2. **`os.add_dll_directory(<dir>)`** — the officially documented Windows mechanism since Python 3.8
+      (dependent-DLL resolution ignores `PATH` by default under secure DLL loading).
+   3. **Prepend the DLL dirs to `os.environ["PATH"]`** — this is what *actually* worked on the target
+      machine this session when `add_dll_directory` alone did not (loader/version-specific), so keep
+      it as a belt-and-suspenders fallback. Do all three; they don't conflict.
+   - **`gpu.py` must be layout-aware:** in dev, the dirs are `site-packages/nvidia/cublas/bin` and
+     `.../nvidia/cudnn/bin`; in a PyInstaller onedir build they're under `sys._MEIPASS`/`_internal`
+     (see §11). Detect `sys.frozen` and branch.
+   - **Register the full set:** `cublas64_12.dll` **and** `cublasLt64_12.dll`, plus the `cudnn*64_9.dll`
+     family — missing `cublasLt` fails the same way as missing `cublas`.
 2. **Whisper wants 16 kHz mono float32.** Capture at 16 kHz mono directly, or resample before
    handing the buffer to faster-whisper.
 3. **`keyboard` lib often needs admin on Windows** — prefer `pynput`; keep Win32 `RegisterHotKey`
@@ -330,8 +432,15 @@ is far faster.)
 5. **HF symlink warning on Windows** is benign (falls back to copies) — optionally enable Windows
    Developer Mode or set `HF_HUB_DISABLE_SYMLINKS_WARNING=1` to silence it.
 6. **First run downloads gigabytes.** Make it explicit with progress; never silently hang.
-7. **Overlay must be click-through / non-focus-stealing** or it will steal focus from the target
-   app and break paste — set the Tkinter window to not take focus, and restore focus before paste.
+7. **Overlay must be non-focus-stealing — and Tkinter has no flag for this.** If the overlay steals
+   focus from the target app, the paste lands in the overlay (or nowhere) and the whole flow breaks.
+   `overrideredirect(True)` + `-topmost` gives a frameless topmost window but it **still activates on
+   show**. There is no Tkinter API for no-activate/click-through; you need Win32 ctypes:
+   `SetWindowLong(hwnd, GWL_EXSTYLE, ... | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT)`. Budget real Phase 3
+   effort for this and validate that paste still lands with the overlay visible. **If it stays flaky,
+   switch the overlay to PySide6** (§3.1 escape hatch) — Qt supports `Qt.WindowDoesNotAcceptFocus` /
+   `Qt.WA_TransparentForMouseEvents` natively. Also restore focus to the prior foreground window
+   before paste regardless of framework.
 
 ---
 
@@ -339,21 +448,26 @@ is far faster.)
 
 Each phase is a shippable increment with its own acceptance criteria. **Do them in order.**
 
-### Phase 0 — Scaffolding
-- **Deliverables:** `pyproject.toml` (deps, ruff, pytest, `utter` entry point), package skeleton
-  from §9, `config.py` (TOML load/save with the §5 schema + defaults), `gpu.py` DLL shim + device
-  detection, logging setup, `LICENSE` (recommend MIT), CI stub.
+### Phase 0 — Scaffolding + concurrency decision
+- **Deliverables:** `pyproject.toml` (deps **with the §2.1 version pins**, ruff, pytest, `utter`
+  entry point), package skeleton from §9, `config.py` (TOML load/save with the §5 schema + defaults),
+  `gpu.py` **layout-aware** DLL shim (§12.1) + device detection, logging setup, a **single-instance
+  guard** (named mutex/lockfile), the **§3.1 concurrency model written down** as an ADR/docstring so
+  later phases don't re-litigate it, `LICENSE` (recommend MIT — confirm with owner), CI stub.
 - **Key libs:** Typer, tomllib/tomli-w, ruff, pytest.
 - **Acceptance:** `python -m utter --help` runs; `utter config` writes a default `config.toml`;
-  `ruff check` and `pytest` pass on an empty test suite; `gpu.py` correctly reports cuda vs cpu.
+  `ruff check` and `pytest` pass; `gpu.py` correctly reports cuda vs cpu **and** resolves the CUDA
+  DLLs in dev layout; a second `utter start` refuses to launch (single-instance guard proven).
 
 ### Phase 1 — Headless transcription pipeline (the core, proves everything)
 - **Deliverables:** `recorder.py`, `transcription.py` (`FasterWhisperService`), `pipeline.py` wired
   as `utter dictate --once` = record N seconds (or until Enter) → transcribe → print text. No GUI.
+  Include a **startup warmup inference** (transcribe a short silence clip after `load()`).
 - **Key libs:** sounddevice, faster-whisper, numpy.
 - **Acceptance:** `utter dictate --once` transcribes real speech correctly on GPU (and on CPU with
   `--device cpu`); a fixture-WAV integration test passes; model stays loaded across repeated calls
-  in one process (no reload per call).
+  in one process (no reload per call); **the warm per-clip compute time is measured and logged, and
+  §10's latency targets are confirmed or corrected against it** (this closes the §10 open item).
 
 ### Phase 2 — Hotkey + paste (makes it feel like dictation)
 - **Deliverables:** `hotkey.py`, `injector.py`; a foreground `utter start` that toggles
@@ -363,11 +477,14 @@ Each phase is a shippable increment with its own acceptance criteria. **Do them 
   prior clipboard is restored; works in ≥3 different apps (editor, browser field, chat box).
 
 ### Phase 3 — Recording overlay
-- **Deliverables:** `ui/overlay.py` — frameless, always-on-top, non-focus-stealing window with a
-  live mic-level animation while recording and a "transcribing…" state after.
-- **Key libs:** Tkinter (or PySide6 if upgrading polish).
+- **Deliverables:** `ui/overlay.py` — frameless, always-on-top, **non-focus-stealing** window
+  (requires the Win32 `WS_EX_NOACTIVATE`/`WS_EX_TRANSPARENT` ctypes work — §12.7, this is not a
+  Tkinter flag) with a live mic-level animation while recording and a "transcribing…" state after.
+  Runs on its own thread per §3.1.
+- **Key libs:** Tkinter + ctypes (**PySide6 is the sanctioned fallback** if no-activate stays flaky).
 - **Acceptance:** overlay appears on hotkey, animates to real mic input, switches to transcribing
-  state, fades out after paste, and does **not** steal focus (paste still lands correctly).
+  state, fades out after paste, and **provably does not steal focus** — paste still lands in the
+  originally-focused app with the overlay visible (test in a real editor, not just asserted).
 
 ### Phase 4 — System tray / background
 - **Deliverables:** `ui/tray.py`; `utter start` runs in the tray (no console window in the packaged
@@ -385,12 +502,16 @@ Each phase is a shippable increment with its own acceptance criteria. **Do them 
   history rows are written locally.
 
 ### Phase 6 — Terminal UI (config + dashboard)
-- **Deliverables:** `ui/tui.py` — Textual app with the §8 tabs (Dashboard/Model/Formatting/Hotkey/
-  Logs); `utter dashboard` launches it; first-run setup wizard.
-- **Key libs:** Textual.
-- **Acceptance:** every setting is editable in the TUI and persists to `config.toml`; Dashboard
-  shows live model/device/VRAM + recent transcriptions; "test transcription" works from the Model
-  tab; changing the hotkey in the TUI takes effect in the running app.
+- **Deliverables:** `ui/tui.py` — Textual app (a **separate console process** per §3.1) with the §8
+  tabs (Dashboard/Model/Formatting/Hotkey/Logs); `utter dashboard` launches it; first-run setup
+  wizard. Implement the **daemon↔TUI contract from §3.1**: TUI writes `config.toml`; daemon watches
+  it and hot-reloads; daemon publishes live status (model/device/VRAM/recent) to `history.db`/
+  `status.json` which the Dashboard polls.
+- **Key libs:** Textual, watchdog (or mtime poll).
+- **Acceptance:** every setting is editable in the TUI and persists to `config.toml`; Dashboard shows
+  live model/device/VRAM + recent transcriptions **published by the running daemon** (cross-process);
+  "test transcription" works from the Model tab; changing the hotkey in the TUI **takes effect in the
+  already-running daemon without a restart** (proves the file-watch hot-reload).
 
 ### Phase 7 — Packaging & release
 - **Deliverables:** `packaging/utter.spec` (onedir, NVIDIA DLLs collected), optional
@@ -447,6 +568,19 @@ History is a local sqlite file the user can disable or delete. State this plainl
 - **License:** recommend MIT; confirm with the owner before Phase 0 lands `LICENSE`.
 - **Model manager depth:** v1 exposes Whisper sizes; a richer "install/remove models" UI can come
   later.
+
+## 17a. Adversarial review applied
+
+This plan was adversarially reviewed before handoff. Fixes folded in: mandated the two-process +
+threading model (§3.1), pinned the Blackwell-compatible faster-whisper/CTranslate2/CUDA versions
+(§2.1), made the CUDA-DLL shim packaging-layout-aware and corrected the PyInstaller `_internal/`
+location (§11, §12.1), corrected the latency analysis + mandated a warmup measurement (§10, Phase 1),
+specified the daemon↔TUI IPC (§3.1, Phase 6), flagged the real Win32 no-activate overlay work + a
+PySide6 escape hatch (§12.7, Phase 3), added the qwen3.6 thinking-suppression requirement (§6),
+plus single-instance guard, audio-device selection, modifier-release-before-paste, clipboard-format
+limitation, `cublasLt64_12.dll`, ~2–3 GB bundle-size reality, and code-signing/SmartScreen (§7,
+§11, §12). One reviewer claim was rejected on evidence: it asserted `qwen3.6` isn't a real model,
+but `ollama list` on the target machine shows it present — see §6 note.
 
 ## 18. Recommended first PR
 
