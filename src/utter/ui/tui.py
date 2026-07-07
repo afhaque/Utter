@@ -231,9 +231,10 @@ class UtterTUI(App):
         is_stale = state == "running" and age > STALE_AFTER_S
         stale = " (stale — daemon may have crashed)" if is_stale else ""
         vram = f"   vram: {s['vram']}" if s.get("vram") else ""
+        error = f"\nERROR: {s['error']}" if s.get("error") else ""
         status_widget.update(
             f"daemon: {state}{stale}   model: {s.get('model')}   device: {s.get('device')}"
-            f"{vram}   hotkey: {s.get('hotkey')}   updated: {s.get('updated', '')[:19]}"
+            f"{vram}   hotkey: {s.get('hotkey')}   updated: {s.get('updated', '')[:19]}{error}"
         )
 
     def _refresh_recent(self) -> None:

@@ -49,10 +49,14 @@ class Tray:
         self.daemon.set_paused(not self.daemon.paused)
 
     def _open_dashboard(self, _icon, _item) -> None:
-        subprocess.Popen(
-            [sys.executable, "-m", "utter", "dashboard"],
-            creationflags=subprocess.CREATE_NEW_CONSOLE,
-        )
+        if getattr(sys, "frozen", False):
+            # packaged: the console CLI exe sits next to the windowless daemon exe
+            from pathlib import Path
+
+            cmd = [str(Path(sys.executable).with_name("utter.exe")), "dashboard"]
+        else:
+            cmd = [sys.executable, "-m", "utter", "dashboard"]
+        subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE)
         log.info("dashboard launched")
 
     def _open_settings(self, _icon, _item) -> None:

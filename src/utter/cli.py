@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 
 import typer
@@ -9,6 +10,12 @@ import typer
 from utter import __version__
 
 app = typer.Typer(help="Utter — free, open-source, fully local dictation for Windows.")
+
+
+def _echo(message: str, err: bool = False) -> None:
+    """typer.echo that survives a windowless exe (stdout/stderr are None there)."""
+    if (sys.stderr if err else sys.stdout) is not None:
+        typer.echo(message, err=err)
 
 
 @app.command()
@@ -68,7 +75,16 @@ def dictate(
         cfg.model.name = model
 
     pipeline = Pipeline(cfg)
-    pipeline.load()
+    try:
+        pipeline.load()
+    except Exception as exc:
+        typer.echo(
+            f"Could not load model {cfg.model.name!r}: {exc}\n"
+            "Check the model name (tiny/base/small/medium/large-v3), your internet "
+            "connection for a first-time download, and see README troubleshooting.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
 
     def one_cycle() -> None:
         if input_file:
@@ -76,7 +92,16 @@ def dictate(
 
             transcript, final = pipeline.process_clip(load_wav(input_file))
         else:
-            pipeline.start_recording()
+            try:
+                pipeline.start_recording()
+            except Exception as exc:
+                typer.echo(
+                    f"Could not open the microphone: {exc}\n"
+                    "Run `utter devices` to list input devices and set [audio].input_device "
+                    "in your config.",
+                    err=True,
+                )
+                raise typer.Exit(code=1) from exc
             if seconds is None:
                 typer.echo("Recording... press Enter to stop.")
                 input()
@@ -119,6 +144,11 @@ def _first_run_wizard() -> None:
 
     if config_path().exists():
         return
+    if sys.stdin is None or not sys.stdin.isatty():
+        # windowless daemon / piped launch: no terminal to ask questions in
+        path = config_store.save(Config())
+        _echo(f"No terminal available — default config written to {path}.")
+        return
     typer.echo("First run — quick setup (press Enter to accept defaults).")
     cfg = Config()
     def _clean(s: str) -> str:
@@ -154,7 +184,7 @@ def start() -> None:
     setup()
     guard = SingleInstance()
     if not guard.acquire():
-        typer.echo("Utter is already running — refusing to start a second instance.", err=True)
+        _echo("Utter is already running — refusing to start a second instance.", err=True)
         raise typer.Exit(code=1)
     _first_run_wizard()
     from utter import app as utter_app
@@ -162,7 +192,7 @@ def start() -> None:
 
     try:
         cfg = config_store.load()
-        typer.echo(
+        _echo(
             f"Utter daemon starting (hotkey: {cfg.general.hotkey} — quit from the tray icon)..."
         )
         utter_app.run(cfg)

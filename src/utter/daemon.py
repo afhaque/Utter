@@ -41,6 +41,7 @@ class Daemon:
         )
         self.hotkey = HotkeyController()
         self._paused = False
+        self.last_error: str = ""
         self._target_hwnd: int | None = None  # focused window when recording started
         self._events: queue.Queue[object] = queue.Queue()
         self._worker = threading.Thread(target=self._run_worker, name="utter-worker", daemon=True)
@@ -93,6 +94,7 @@ class Daemon:
             "vram": _vram_usage(),
             "hotkey": self.cfg.general.hotkey,
             "paused": self._paused,
+            "error": self.last_error,
             "updated": datetime.now(UTC).isoformat(),
         }
         try:
@@ -148,8 +150,11 @@ class Daemon:
                 continue
             try:
                 self._handle_toggle()
-            except Exception:
+                self.last_error = ""
+            except Exception as exc:
                 log.exception("dictation cycle failed")
+                self.last_error = f"dictation failed: {exc}"
+                self.publish_status()
                 self._notify(self.on_idle)
 
     def _handle_toggle(self) -> None:
@@ -187,9 +192,12 @@ class Daemon:
     def _load_model(self) -> None:
         try:
             self.pipeline.load()
+            self.last_error = ""
             self.publish_status()  # device is now concrete (cuda/cpu)
-        except Exception:
+        except Exception as exc:
             log.exception("model load failed")
+            self.last_error = f"model load failed: {exc}"
+            self.publish_status()
 
     def shutdown(self) -> None:
         self._stop.set()

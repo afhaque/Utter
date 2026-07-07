@@ -2,6 +2,7 @@
 
 import logging
 import logging.handlers
+import sys
 
 from utter.paths import log_dir
 
@@ -18,7 +19,8 @@ def setup(level: int = logging.INFO, console: bool = True) -> None:
     )
     file_handler.setFormatter(logging.Formatter(_FORMAT))
     root.addHandler(file_handler)
-    if console:
+    # a windowless (console=False) frozen exe has no stderr — file logging only
+    if console and sys.stderr is not None:
         stream = logging.StreamHandler()
         stream.setFormatter(logging.Formatter(_FORMAT))
         root.addHandler(stream)
