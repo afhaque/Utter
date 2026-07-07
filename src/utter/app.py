@@ -25,5 +25,12 @@ def build(cfg: Config) -> tuple[Daemon, Overlay | None]:
 
 
 def run(cfg: Config) -> None:
+    from utter.ui.tray import Tray
+
     daemon, _overlay = build(cfg)
-    daemon.run_forever()
+    daemon.start()
+    tray = Tray(daemon)
+    try:
+        tray.run()  # pystray owns the main thread (ADR 0001); returns on Quit
+    finally:
+        daemon.shutdown()
