@@ -12,8 +12,11 @@ import queue
 import threading
 
 from utter.core.config import Config
+from utter.core.formatting import format_text
+from utter.core.history import HistoryStore
 from utter.core.injector import Injector
 from utter.core.pipeline import Pipeline
+from utter.core.transcription import Transcript
 from utter.hotkey import HotkeyController
 
 log = logging.getLogger(__name__)
@@ -25,7 +28,10 @@ class Daemon:
         self.injector = Injector(
             method=cfg.injection.method, pre_paste_delay_ms=cfg.injection.pre_paste_delay_ms
         )
-        self.pipeline = Pipeline(cfg, injector=self.injector.paste)
+        self.history = HistoryStore()
+        self.pipeline = Pipeline(
+            cfg, formatter=self._format, injector=self.injector.paste, on_result=self._record
+        )
         self.hotkey = HotkeyController()
         self.paused = False
         self._events: queue.Queue[str] = queue.Queue()
@@ -35,6 +41,20 @@ class Daemon:
         self.on_recording_started = None
         self.on_transcribing = None
         self.on_idle = None
+
+    # -- pipeline hooks -------------------------------------------------------------------
+    def _format(self, text: str) -> str:
+        return format_text(text, self.cfg.formatting)  # reads live cfg: survives hot-reload
+
+    def _record(self, transcript: Transcript, final: str) -> None:
+        if self.cfg.privacy.save_history:
+            self.history.add(
+                raw=transcript.text,
+                final=final,
+                latency_ms=transcript.latency_ms,
+                model=self.cfg.model.name,
+                language=transcript.language,
+            )
 
     # -- hotkey side (must return fast) -------------------------------------------------
     def toggle(self) -> None:
