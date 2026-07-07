@@ -172,6 +172,10 @@ class UtterTUI(App):
                     "Toggle hotkey", Input(value=cfg.general.hotkey, id="hotkey_input")
                 )
                 yield from self._row(
+                    "Dashboard hotkey (blank = off)",
+                    Input(value=cfg.general.dashboard_hotkey, id="dash_hotkey_input"),
+                )
+                yield from self._row(
                     "Show overlay", Switch(value=cfg.general.overlay, id="gen_overlay")
                 )
                 yield from self._row(
@@ -323,14 +327,20 @@ class UtterTUI(App):
 
     def save_hotkey(self) -> None:
         combo = self.query_one("#hotkey_input", Input).value.strip()
+        dash_combo = self.query_one("#dash_hotkey_input", Input).value.strip()
         msg = self.query_one("#hotkey_msg", Static)
         try:
             parse_combo(combo)
+            if dash_combo:
+                parse_combo(dash_combo)
+            if dash_combo and dash_combo == combo:
+                raise ValueError("dashboard hotkey must differ from the toggle hotkey")
         except ValueError as exc:
             msg.update(f"invalid hotkey: {exc}")
             return
         self._fresh_cfg()
         self.cfg.general.hotkey = combo
+        self.cfg.general.dashboard_hotkey = dash_combo
         self.cfg.general.overlay = self.query_one("#gen_overlay", Switch).value
         self.cfg.general.launch_on_startup = self.query_one("#gen_startup", Switch).value
         self.cfg.injection.method = str(self.query_one("#inj_method", Select).value)

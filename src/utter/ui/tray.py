@@ -4,30 +4,22 @@ from __future__ import annotations
 
 import logging
 import os
-import subprocess
 
 import pystray
 from PIL import Image, ImageDraw
 
 from utter.daemon import Daemon
-from utter.paths import cli_command, config_path
+from utter.paths import config_path
 
 log = logging.getLogger(__name__)
 
 
 def _icon_image(size: int = 64) -> Image.Image:
-    """The otter logo, center-cropped square; falls back to a drawn mic glyph."""
+    """The otter's face (same crop as the overlay badge); drawn mic glyph fallback."""
     try:
-        from importlib import resources
+        from utter.ui.branding import otter_face
 
-        with resources.files("utter").joinpath("assets/logo.jpg").open("rb") as f:
-            img = Image.open(f).convert("RGBA")
-        side = min(img.size)
-        left = (img.width - side) // 2
-        top = (img.height - side) // 2
-        return img.crop((left, top, left + side, top + side)).resize(
-            (size, size), Image.LANCZOS
-        )
+        return otter_face(size)
     except Exception:
         log.warning("logo asset unavailable — using drawn mic glyph")
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
@@ -61,8 +53,7 @@ class Tray:
         self.daemon.set_paused(not self.daemon.paused)
 
     def _open_dashboard(self, _icon, _item) -> None:
-        subprocess.Popen(cli_command("dashboard"), creationflags=subprocess.CREATE_NEW_CONSOLE)
-        log.info("dashboard launched")
+        self.daemon.open_dashboard()
 
     def _open_settings(self, _icon, _item) -> None:
         os.startfile(config_path())  # noqa: S606 — open in the user's editor

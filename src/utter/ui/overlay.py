@@ -52,6 +52,7 @@ class Overlay:
         self._level_getter: Callable[[], float] | None = None
         self._levels: deque[float] = deque([0.0] * BARS, maxlen=BARS)
         self._spin = 0
+        self._otter = None
 
     # -- public API (thread-safe: only touches the queue / user32) ----------------------
     def start(self) -> None:
@@ -74,6 +75,19 @@ class Overlay:
         return self._hwnd
 
     # -- overlay thread ------------------------------------------------------------------
+    @staticmethod
+    def _load_otter_badge(size: int = 26):
+        """Circular otter-face badge; None if the asset is unavailable."""
+        try:
+            from PIL import ImageTk
+
+            from utter.ui.branding import otter_face
+
+            return ImageTk.PhotoImage(otter_face(size))
+        except Exception:
+            log.warning("otter badge unavailable — overlay renders without it")
+            return None
+
     def _run(self) -> None:
         root = tk.Tk()
         root.overrideredirect(True)
@@ -88,6 +102,7 @@ class Overlay:
         root.configure(bg=MAGIC)
         canvas = tk.Canvas(root, width=WIDTH, height=HEIGHT, bg=MAGIC, highlightthickness=0)
         canvas.pack()
+        self._otter = self._load_otter_badge()  # PhotoImage needs the Tk root to exist
         root.update_idletasks()
 
         user32 = ctypes.windll.user32
@@ -132,6 +147,8 @@ class Overlay:
         canvas.delete("all")
         self._pill(canvas)
         mid = HEIGHT / 2
+        if self._otter is not None:
+            canvas.create_image(WIDTH - 19, mid, image=self._otter)
         if self._state == "recording":
             if self._level_getter:
                 try:
@@ -154,7 +171,7 @@ class Overlay:
             for i in range(3):
                 phase = math.sin((self._spin * 0.25) - i * 0.9)
                 r = 2.2 + 1.3 * (phase + 1)
-                cx = WIDTH / 2 - 18 + i * 18
+                cx = WIDTH / 2 - 28 + i * 18
                 canvas.create_oval(cx - r, mid - r, cx + r, mid + r, fill=ACCENT, outline="")
 
     @staticmethod

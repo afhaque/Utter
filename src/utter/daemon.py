@@ -24,7 +24,7 @@ from utter.core.injector import Injector
 from utter.core.pipeline import Pipeline
 from utter.core.transcription import Transcript
 from utter.hotkey import HotkeyController
-from utter.paths import config_path, status_path
+from utter.paths import cli_command, config_path, status_path
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +40,7 @@ class Daemon:
             cfg, formatter=self._format, injector=self._inject, on_result=self._record
         )
         self.hotkey = HotkeyController()
+        self.dashboard_hotkey = HotkeyController()  # own thread — ids are thread-scoped
         self._paused = False
         self.last_error: str = ""
         self._target_hwnd: int | None = None  # focused window when recording started
@@ -129,6 +130,16 @@ class Daemon:
                 log.error("rejected hotkey %r: %s — keeping %r",
                           cfg.general.hotkey, exc, old_hotkey)
                 cfg.general.hotkey = old_hotkey
+        old_dash = self.cfg.general.dashboard_hotkey
+        if cfg.general.dashboard_hotkey != old_dash:
+            try:
+                self._register_dashboard_hotkey(cfg.general.dashboard_hotkey)
+                log.info("dashboard hotkey re-registered: %s -> %s",
+                         old_dash, cfg.general.dashboard_hotkey)
+            except (ValueError, RuntimeError) as exc:
+                log.error("rejected dashboard hotkey %r: %s — keeping %r",
+                          cfg.general.dashboard_hotkey, exc, old_dash)
+                cfg.general.dashboard_hotkey = old_dash
         from utter.startup import sync_launch_on_startup
 
         cfg = sync_launch_on_startup(cfg)  # TUI startup switch takes effect without restart
@@ -140,6 +151,17 @@ class Daemon:
     # -- hotkey side (must return fast) -------------------------------------------------
     def toggle(self) -> None:
         self._events.put("toggle")
+
+    def open_dashboard(self) -> None:
+        """Launch the dashboard TUI in its own console (also used by the tray menu)."""
+        subprocess.Popen(cli_command("dashboard"), creationflags=subprocess.CREATE_NEW_CONSOLE)
+        log.info("dashboard launched")
+
+    def _register_dashboard_hotkey(self, combo: str) -> None:
+        if combo:
+            self.dashboard_hotkey.register(combo, self.open_dashboard)
+        else:
+            self.dashboard_hotkey.unregister()
 
     # -- worker side ---------------------------------------------------------------------
     def _run_worker(self) -> None:
@@ -187,6 +209,10 @@ class Daemon:
         (first toggle simply waits on the load lock if it wins the race)."""
         self._worker.start()
         self.hotkey.register(self.cfg.general.hotkey, self.toggle)
+        try:
+            self._register_dashboard_hotkey(self.cfg.general.dashboard_hotkey)
+        except (ValueError, RuntimeError) as exc:
+            log.error("dashboard hotkey unavailable: %s", exc)  # never blocks dictation
         threading.Thread(target=self._watch_config, name="utter-cfgwatch", daemon=True).start()
         self.publish_status()
         threading.Thread(target=self._load_model, name="utter-modelload", daemon=True).start()
@@ -206,6 +232,7 @@ class Daemon:
         self._stop.set()
         self._events.put(_STOP)
         self.hotkey.unregister()
+        self.dashboard_hotkey.unregister()
         if self.pipeline.recorder.recording:
             self.pipeline.recorder.stop()  # release the mic
         if self._worker.is_alive():

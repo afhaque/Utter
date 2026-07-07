@@ -21,6 +21,7 @@ INJECTION_METHODS = ["paste", "sendinput"]
 @dataclass
 class GeneralCfg:
     hotkey: str = "ctrl+alt+space"
+    dashboard_hotkey: str = "ctrl+alt+d"  # empty string disables it
     launch_on_startup: bool = False
     overlay: bool = True
 
