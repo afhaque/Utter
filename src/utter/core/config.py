@@ -10,6 +10,13 @@ import tomli_w
 
 from utter.paths import config_path
 
+# Single owner of the value vocabularies — the TUI and validators import these.
+MODEL_SIZES = ["tiny", "base", "small", "medium", "large-v3"]  # any HF id/path also works
+DEVICES = ["cuda", "cpu", "auto"]
+COMPUTE_TYPES = ["float16", "int8_float16", "int8"]
+CAP_MODES = ["sentence", "lower", "upper", "as-is"]
+INJECTION_METHODS = ["paste", "sendinput"]
+
 
 @dataclass
 class GeneralCfg:
@@ -32,6 +39,7 @@ class ModelCfg:
     compute_type: str = "float16"
     beam_size: int = 5
     language: str = "auto"
+    vad_filter: bool = True  # guards against Whisper hallucinating text on silence
 
 
 @dataclass
@@ -97,19 +105,19 @@ def load(path: Path | None = None) -> Config:
     path = path or config_path()
     cfg = Config()
     if path.exists():
-        data = path.read_bytes()
-        # tolerate a UTF-8 BOM — Notepad and PowerShell 5.1 write one, tomllib rejects it
-        if data.startswith(b"\xef\xbb\xbf"):
-            data = data[3:]
-        _merge(cfg, tomllib.loads(data.decode("utf-8")))
+        # utf-8-sig tolerates the BOM Notepad/PowerShell 5.1 write; tomllib rejects it raw
+        _merge(cfg, tomllib.loads(path.read_text(encoding="utf-8-sig")))
     return cfg
 
 
 def save(cfg: Config, path: Path | None = None) -> Path:
+    """Atomic write (temp + replace) so the daemon's mtime watcher never sees a torn file."""
     path = path or config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "wb") as f:
+    tmp = path.with_suffix(".toml.tmp")
+    with open(tmp, "wb") as f:
         tomli_w.dump(cfg.to_dict(), f)
+    tmp.replace(path)
     return path
 
 

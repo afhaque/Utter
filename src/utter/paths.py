@@ -4,17 +4,22 @@ Everything lives under %APPDATA%\\Utter (overridable with UTTER_HOME for tests).
 """
 
 import os
+from functools import lru_cache
 from pathlib import Path
+
+
+@lru_cache(maxsize=8)  # keyed on the resolved path: mkdir once, not per lookup
+def _ensure_dir(path_str: str) -> Path:
+    home = Path(path_str)
+    home.mkdir(parents=True, exist_ok=True)
+    return home
 
 
 def utter_home() -> Path:
     override = os.environ.get("UTTER_HOME")
     if override:
-        home = Path(override)
-    else:
-        home = Path(os.environ.get("APPDATA", Path.home())) / "Utter"
-    home.mkdir(parents=True, exist_ok=True)
-    return home
+        return _ensure_dir(override)
+    return _ensure_dir(str(Path(os.environ.get("APPDATA", Path.home())) / "Utter"))
 
 
 def config_path() -> Path:

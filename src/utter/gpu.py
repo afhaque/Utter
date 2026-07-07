@@ -71,9 +71,8 @@ def detect_device() -> str:
 
 
 def resolve_device(configured: str) -> str:
-    """Map a configured device (cuda|cpu|auto) to a concrete one."""
-    if configured == "cpu":
-        return "cpu"
-    if configured == "cuda":
-        return detect_device()  # degrade gracefully if CUDA is broken
-    return detect_device()
+    """Map a configured device (cuda|cpu|auto) to a concrete one.
+
+    'cuda' and 'auto' both probe — a broken CUDA setup degrades gracefully to CPU.
+    """
+    return "cpu" if configured == "cpu" else detect_device()

@@ -36,6 +36,8 @@ BG = "#16161e"
 ACCENT = "#7aa2f7"
 TEXT = "#a9b1d6"
 TICK_MS = 40
+HIDDEN_TICK_MS = 200  # command-poll cadence while invisible (no redraws)
+LEVEL_GAIN = 4.0  # display gain over the recorder's raw peak
 
 
 class Overlay:
@@ -57,23 +59,17 @@ class Overlay:
 
     def show_recording(self, level_getter: Callable[[], float]) -> None:
         self._commands.put(("recording", level_getter))
-        self._show_window()
 
     def show_transcribing(self) -> None:
         self._commands.put(("transcribing", None))
 
     def hide(self) -> None:
         self._commands.put(("hidden", None))
-        if self._hwnd:
-            ctypes.windll.user32.ShowWindow(self._hwnd, SW_HIDE)
 
     @property
     def hwnd(self) -> int | None:
+        """Toplevel hwnd — used by verification probes."""
         return self._hwnd
-
-    def _show_window(self) -> None:
-        if self._hwnd:
-            ctypes.windll.user32.ShowWindow(self._hwnd, SW_SHOWNOACTIVATE)
 
     # -- overlay thread ------------------------------------------------------------------
     def _run(self) -> None:
@@ -103,15 +99,26 @@ class Overlay:
         log.info("overlay ready (hwnd=%s)", hwnd)
 
         def tick() -> None:
+            # visibility is DERIVED from state here, on the Tk thread — the command
+            # queue is the single channel, so show/hide can never interleave badly
             while True:
                 try:
                     state, payload = self._commands.get_nowait()
                 except queue.Empty:
                     break
+                if state == self._state:
+                    continue
+                if state == "hidden":
+                    user32.ShowWindow(hwnd, SW_HIDE)
+                elif self._state == "hidden":
+                    user32.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
                 self._state = state
                 if state == "recording":
                     self._level_getter = payload
                     self._levels.extend([0.0] * BARS)
+            if self._state == "hidden":
+                root.after(HIDDEN_TICK_MS, tick)  # idle: no redraw, slow poll
+                return
             self._draw(canvas)
             root.after(TICK_MS, tick)
 
@@ -123,7 +130,7 @@ class Overlay:
         if self._state == "recording":
             if self._level_getter:
                 try:
-                    self._levels.append(self._level_getter())
+                    self._levels.append(min(1.0, self._level_getter() * LEVEL_GAIN))
                 except Exception:
                     self._levels.append(0.0)
             canvas.create_oval(14, HEIGHT / 2 - 5, 24, HEIGHT / 2 + 5, fill="#f7768e", outline="")

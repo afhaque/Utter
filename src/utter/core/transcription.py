@@ -11,10 +11,8 @@ from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Protocol
 
-import numpy as np
-
 from utter import gpu
-from utter.core.recorder import AudioClip
+from utter.core.recorder import AudioClip, silence_clip
 
 log = logging.getLogger(__name__)
 
@@ -35,10 +33,13 @@ class TranscriptionService(Protocol):
 class FasterWhisperService:
     """faster-whisper (CTranslate2) implementation. Keeps the model resident (§10)."""
 
-    def __init__(self, beam_size: int = 5, language: str = "auto") -> None:
+    def __init__(
+        self, beam_size: int = 5, language: str = "auto", vad_filter: bool = True
+    ) -> None:
         self._model = None
         self.beam_size = beam_size
         self.language = language
+        self.vad_filter = vad_filter
         self.device = "unloaded"
         self.model_name = ""
 
@@ -64,14 +65,13 @@ class FasterWhisperService:
     def _warmup(self) -> None:
         """First CUDA call pays kernel JIT/lazy-load cost (§10) — amortize it at startup."""
         t0 = perf_counter()
-        silence = AudioClip(np.zeros(8000, dtype=np.float32), 16000)
-        self._transcribe_raw(silence, beam_size=1)
+        self._transcribe_raw(silence_clip(), beam_size=1)
         log.info("warmup inference done in %.0f ms", (perf_counter() - t0) * 1000)
 
     def _transcribe_raw(self, clip: AudioClip, beam_size: int) -> tuple[list, object]:
         language = None if self.language in ("auto", "") else self.language
         segments, info = self._model.transcribe(
-            clip.samples, beam_size=beam_size, language=language
+            clip.samples, beam_size=beam_size, language=language, vad_filter=self.vad_filter
         )
         return list(segments), info  # consume the generator — decoding happens here
 

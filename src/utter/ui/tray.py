@@ -46,8 +46,7 @@ class Tray:
         return "Resume dictation" if self.daemon.paused else "Pause dictation"
 
     def _toggle_pause(self, _icon, _item) -> None:
-        self.daemon.paused = not self.daemon.paused
-        log.info("dictation %s", "paused" if self.daemon.paused else "resumed")
+        self.daemon.set_paused(not self.daemon.paused)
 
     def _open_dashboard(self, _icon, _item) -> None:
         subprocess.Popen(
@@ -67,6 +66,3 @@ class Tray:
     def run(self) -> None:
         """Blocks the main thread until Quit."""
         self.icon.run()
-
-    def menu_titles(self) -> list[str]:
-        return [str(item.text) for item in self.icon.menu.items]

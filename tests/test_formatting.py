@@ -1,3 +1,5 @@
+import dataclasses
+
 import pytest
 
 from utter.core.config import FormattingCfg, LlmCfg
@@ -5,10 +7,7 @@ from utter.core.formatting import apply_rules, format_text, strip_think
 
 
 def prefs(**kw) -> FormattingCfg:
-    p = FormattingCfg()
-    for k, v in kw.items():
-        setattr(p, k, v)
-    return p
+    return dataclasses.replace(FormattingCfg(), **kw)  # raises on typo'd field names
 
 
 RAW = "Hello world. this is, um, a test of dictation."

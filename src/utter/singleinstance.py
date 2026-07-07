@@ -20,11 +20,14 @@ class SingleInstance:
 
     def acquire(self) -> bool:
         """Try to become the single running daemon. False if one already runs."""
-        kernel32 = ctypes.windll.kernel32
+        # use_last_error captures the code at call time — ctypes-internal calls can
+        # clobber a later windll.kernel32.GetLastError()
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         handle = kernel32.CreateMutexW(None, False, lock_name())
+        already = ctypes.get_last_error() == ERROR_ALREADY_EXISTS
         if not handle:
-            raise ctypes.WinError()
-        if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
+            raise ctypes.WinError(ctypes.get_last_error())
+        if already:
             kernel32.CloseHandle(handle)
             return False
         self._handle = handle

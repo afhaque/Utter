@@ -34,3 +34,14 @@ def test_two_keys_rejected():
 def test_unknown_key_rejected():
     with pytest.raises(ValueError):
         parse_combo("ctrl+bogus")
+
+
+def test_bare_letter_rejected():
+    # RegisterHotKey would swallow the key system-wide
+    with pytest.raises(ValueError):
+        parse_combo("v")
+
+
+def test_bare_space_rejected():
+    with pytest.raises(ValueError):
+        parse_combo("space")

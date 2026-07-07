@@ -43,6 +43,9 @@ def devices() -> None:
 
 @app.command()
 def dictate(
+    once: bool = typer.Option(
+        True, "--once/--loop", help="Single dictation (default) or repeat until Ctrl+C."
+    ),
     seconds: float | None = typer.Option(
         None, "--seconds", help="Record a fixed duration instead of waiting for Enter."
     ),
@@ -67,22 +70,36 @@ def dictate(
     pipeline = Pipeline(cfg)
     pipeline.load()
 
-    if input_file:
-        from utter.core.recorder import load_wav
+    def one_cycle() -> None:
+        if input_file:
+            from utter.core.recorder import load_wav
 
-        transcript, final = pipeline.process_clip(load_wav(input_file))
-    else:
-        pipeline.start_recording()
-        if seconds is None:
-            typer.echo("Recording... press Enter to stop.")
-            input()
+            transcript, final = pipeline.process_clip(load_wav(input_file))
         else:
-            typer.echo(f"Recording for {seconds:.0f}s...")
-            time.sleep(seconds)
-        transcript, final = pipeline.stop_and_process()
+            pipeline.start_recording()
+            if seconds is None:
+                typer.echo("Recording... press Enter to stop.")
+                input()
+            else:
+                typer.echo(f"Recording for {seconds:.0f}s...")
+                time.sleep(seconds)
+            result = pipeline.stop_and_process()
+            if result is None:
+                typer.echo("(clip too short — discarded)", err=True)
+                return
+            transcript, final = result
+        typer.echo(final)
+        typer.echo(f"[{transcript.language}, {transcript.latency_ms:.0f} ms]", err=True)
 
-    typer.echo(final)
-    typer.echo(f"[{transcript.language}, {transcript.latency_ms:.0f} ms]", err=True)
+    if once or input_file:
+        one_cycle()
+    else:
+        typer.echo("Loop mode — Ctrl+C to quit.")
+        try:
+            while True:
+                one_cycle()
+        except KeyboardInterrupt:
+            pass
 
 
 @app.command()
@@ -105,7 +122,7 @@ def _first_run_wizard() -> None:
     typer.echo("First run — quick setup (press Enter to accept defaults).")
     cfg = Config()
     def _clean(s: str) -> str:
-        return s.strip().lstrip("﻿")
+        return s.strip()
 
     cfg.model.name = _clean(
         typer.prompt(
@@ -145,7 +162,9 @@ def start() -> None:
 
     try:
         cfg = config_store.load()
-        typer.echo(f"Utter daemon starting (hotkey: {cfg.general.hotkey}, Ctrl+C to stop)...")
+        typer.echo(
+            f"Utter daemon starting (hotkey: {cfg.general.hotkey} — quit from the tray icon)..."
+        )
         utter_app.run(cfg)
     except KeyboardInterrupt:
         pass

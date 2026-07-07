@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import threading
 import time
+from collections.abc import Callable
 from ctypes import wintypes
 
 import pyperclip
@@ -74,7 +76,12 @@ def wait_modifiers_released(timeout_s: float = 1.0) -> bool:
 
 
 def send_unicode(text: str) -> None:
-    """Type text directly via SendInput KEYEVENTF_UNICODE (paste-hostile apps)."""
+    """Type text directly via SendInput KEYEVENTF_UNICODE (paste-hostile apps).
+
+    Deliberately NOT pynput's Controller.type(): pynput maps characters through
+    VkKeyScan (layout- and modifier-sensitive), while §7 mandates pure-unicode
+    injection that is immune to keyboard layout and stuck modifiers.
+    """
     user32 = ctypes.windll.user32
     units = text.encode("utf-16-le")
     inputs = []
@@ -91,16 +98,34 @@ def send_unicode(text: str) -> None:
 
 
 class Injector:
-    def __init__(self, method: str = "paste", pre_paste_delay_ms: int = 150) -> None:
-        self.method = method
-        self.pre_paste_delay_ms = pre_paste_delay_ms
+    def __init__(self, cfg_getter: Callable[[], object] | None = None,
+                 method: str = "paste", pre_paste_delay_ms: int = 150) -> None:
+        # cfg_getter returns the live InjectionCfg so hot-reloaded settings apply
+        # without field-by-field plumbing; the kwargs serve direct/standalone use.
+        self._cfg_getter = cfg_getter
+        self._method = method
+        self._pre_paste_delay_ms = pre_paste_delay_ms
         self._kb = Controller()
 
-    def paste(self, text: str) -> None:
+    @property
+    def method(self) -> str:
+        return self._cfg_getter().method if self._cfg_getter else self._method
+
+    @property
+    def pre_paste_delay_ms(self) -> int:
+        if self._cfg_getter:
+            return self._cfg_getter().pre_paste_delay_ms
+        return self._pre_paste_delay_ms
+
+    def paste(self, text: str, target_hwnd: int | None = None) -> None:
         if not text:
             return
-        # small delay so the target window regains focus (overlay may just have closed)
+        # small delay, then make sure the original target window is foreground again (§12.7)
         time.sleep(self.pre_paste_delay_ms / 1000)
+        if target_hwnd:
+            user32 = ctypes.windll.user32
+            if user32.GetForegroundWindow() != target_hwnd:
+                user32.SetForegroundWindow(target_hwnd)
         wait_modifiers_released()
         if self.method == "sendinput":
             send_unicode(text)
@@ -116,10 +141,14 @@ class Injector:
         with self._kb.pressed(Key.ctrl):
             self._kb.press("v")
             self._kb.release("v")
-        time.sleep(0.3)  # let the target consume the clipboard before restoring
         if prior is not None:
-            try:
-                pyperclip.copy(prior)
-            except Exception:
-                log.warning("could not restore prior clipboard")
+            # restore AFTER the target consumed the clipboard, without blocking the
+            # worker thread (the paste itself already landed)
+            def _restore(value: str = prior) -> None:
+                try:
+                    pyperclip.copy(value)
+                except Exception:
+                    log.warning("could not restore prior clipboard")
+
+            threading.Timer(0.3, _restore).start()
         log.info("injected %d chars via clipboard paste", len(text))

@@ -59,7 +59,8 @@ class RecorderService:
                 log.warning("audio status: %s", status)
             with self._lock:
                 self._chunks.append(indata[:, 0].copy())
-            self._level = min(1.0, float(np.abs(indata).max()) * 4)
+            # raw peak 0..1, allocation-free; display gain/shaping belongs to the overlay
+            self._level = min(1.0, max(float(indata.max()), -float(indata.min())))
 
         self._chunks = []
         self._stream = sd.InputStream(
@@ -75,11 +76,12 @@ class RecorderService:
         )
 
     def stop(self) -> AudioClip:
-        if self._stream is None:
+        with self._lock:  # stop() can race between worker and shutdown paths
+            stream, self._stream = self._stream, None
+        if stream is None:
             return AudioClip(np.zeros(0, dtype=np.float32), self._sample_rate)
-        self._stream.stop()
-        self._stream.close()
-        self._stream = None
+        stream.stop()
+        stream.close()
         self._level = 0.0
         with self._lock:
             samples = (
@@ -93,14 +95,20 @@ class RecorderService:
         return clip
 
 
-def load_wav(path: str) -> AudioClip:
-    """Load a 16-bit PCM WAV as a mono float32 clip (for --input-file and tests)."""
-    import wave
+def silence_clip(seconds: float = 0.5, sample_rate: int = 16000) -> AudioClip:
+    """A silent clip — used for warmup inference and smoke tests."""
+    return AudioClip(np.zeros(int(seconds * sample_rate), dtype=np.float32), sample_rate)
 
-    with wave.open(path, "rb") as w:
-        rate = w.getframerate()
-        frames = w.readframes(w.getnframes())
-        data = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
-        if w.getnchannels() > 1:
-            data = data.reshape(-1, w.getnchannels()).mean(axis=1)
-    return AudioClip(data, rate)
+
+def load_wav(path: str) -> AudioClip:
+    """Load any audio file as a 16 kHz mono float32 clip (--input-file and tests).
+
+    Uses faster-whisper's PyAV decoder: handles every common format and resamples.
+    """
+    from utter import gpu
+
+    gpu.register_dlls()  # before any faster_whisper import (§12.1)
+    from faster_whisper.audio import decode_audio
+
+    data = decode_audio(path, sampling_rate=16000)
+    return AudioClip(data, 16000)

@@ -59,6 +59,17 @@ def apply_rules(text: str, prefs: FormattingCfg) -> str:
     return out
 
 
+_client: httpx.Client | None = None
+
+
+def _http() -> httpx.Client:
+    """Shared keep-alive client — a fresh TCP connection per dictation is wasted work."""
+    global _client
+    if _client is None:
+        _client = httpx.Client()
+    return _client
+
+
 def apply_llm(text: str, llm: LlmCfg) -> str:
     """Tier-2 Ollama pass. Raises on any failure — callers fall back to tier-1."""
     payload: dict = {
@@ -68,7 +79,7 @@ def apply_llm(text: str, llm: LlmCfg) -> str:
     }
     if llm.disable_thinking:
         payload["think"] = False
-    resp = httpx.post(
+    resp = _http().post(
         f"{llm.base_url}/api/generate", json=payload, timeout=llm.timeout_seconds
     )
     resp.raise_for_status()

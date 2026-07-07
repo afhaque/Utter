@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -24,16 +25,17 @@ CREATE TABLE IF NOT EXISTS history (
 class HistoryStore:
     def __init__(self, path: Path | None = None) -> None:
         self._path = path or history_db_path()
-        with self._connect() as con:
+        with closing(sqlite3.connect(self._path)) as con, con:
             con.execute(_SCHEMA)
 
-    def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._path)  # connection per call: thread-safe by construction
+    def _connect(self) -> closing:
+        # connection per call (closed, not GC'd): thread-safe by construction
+        return closing(sqlite3.connect(self._path))
 
     def add(
         self, raw: str, final: str, latency_ms: float, model: str, language: str
     ) -> None:
-        with self._connect() as con:
+        with self._connect() as con, con:
             con.execute(
                 "INSERT INTO history (ts, raw, final, latency_ms, model, language) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
