@@ -7,9 +7,12 @@ worker thread runs the blocking record→transcribe→format→inject chain. UI 
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import queue
 import threading
+from datetime import UTC, datetime
 
 from utter.core.config import Config
 from utter.core.formatting import format_text
@@ -18,6 +21,7 @@ from utter.core.injector import Injector
 from utter.core.pipeline import Pipeline
 from utter.core.transcription import Transcript
 from utter.hotkey import HotkeyController
+from utter.paths import config_path, status_path
 
 log = logging.getLogger(__name__)
 
@@ -55,6 +59,42 @@ class Daemon:
                 model=self.cfg.model.name,
                 language=transcript.language,
             )
+        self.publish_status()
+
+    # -- daemon -> TUI status (ADR 0001 file-based IPC) -----------------------------------
+    def publish_status(self, running: bool = True) -> None:
+        status = {
+            "running": running,
+            "pid": os.getpid(),
+            "model": self.cfg.model.name,
+            "device": self.transcriber_device,
+            "hotkey": self.cfg.general.hotkey,
+            "paused": self.paused,
+            "updated": datetime.now(UTC).isoformat(),
+        }
+        try:
+            status_path().write_text(json.dumps(status, indent=2), encoding="utf-8")
+        except OSError:
+            log.exception("could not write status.json")
+
+    @property
+    def transcriber_device(self) -> str:
+        return self.pipeline.transcriber.device
+
+    # -- config hot-reload (TUI writes config.toml; we watch its mtime) -------------------
+    def _watch_config(self) -> None:
+        from utter.core import config as config_store
+
+        path = config_path()
+        last = path.stat().st_mtime if path.exists() else 0.0
+        while not self._stop.wait(1.0):
+            try:
+                mtime = path.stat().st_mtime if path.exists() else 0.0
+                if mtime != last:
+                    last = mtime
+                    self.reload_config(config_store.load())
+            except Exception:
+                log.exception("config watch failed")
 
     # -- hotkey side (must return fast) -------------------------------------------------
     def toggle(self) -> None:
@@ -95,10 +135,12 @@ class Daemon:
 
     # -- lifecycle -----------------------------------------------------------------------
     def start(self) -> None:
-        """Load the model, start the worker, and register the hotkey."""
+        """Load the model, start the worker, register the hotkey, watch the config."""
         self.pipeline.load()
         self._worker.start()
         self.hotkey.register(self.cfg.general.hotkey, self.toggle)
+        threading.Thread(target=self._watch_config, name="utter-cfgwatch", daemon=True).start()
+        self.publish_status()
         log.info("daemon ready — press %s to dictate", self.cfg.general.hotkey)
 
     def reload_config(self, cfg: Config) -> None:
@@ -111,6 +153,7 @@ class Daemon:
             log.info("hotkey re-registered: %s -> %s", old.general.hotkey, cfg.general.hotkey)
         self.injector.method = cfg.injection.method
         self.injector.pre_paste_delay_ms = cfg.injection.pre_paste_delay_ms
+        self.publish_status()
         log.info("config hot-reloaded")
 
     def shutdown(self) -> None:
@@ -118,6 +161,7 @@ class Daemon:
         self.hotkey.unregister()
         if self.pipeline.recorder.recording:
             self.pipeline.recorder.stop()  # release the mic
+        self.publish_status(running=False)
         log.info("daemon shut down cleanly")
 
     def run_forever(self) -> None:

@@ -33,6 +33,12 @@ def test_unknown_keys_ignored(tmp_path):
     assert not hasattr(cfg.general, "bogus")
 
 
+def test_utf8_bom_tolerated(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_bytes(b'\xef\xbb\xbf[general]\nhotkey = "f8"\n')
+    assert config_store.load(path).general.hotkey == "f8"
+
+
 def test_ensure_exists_creates_once(tmp_path):
     path = tmp_path / "config.toml"
     _, created_first = config_store.ensure_exists(path)

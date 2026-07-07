@@ -86,6 +86,49 @@ def dictate(
 
 
 @app.command()
+def dashboard() -> None:
+    """Open the terminal dashboard / settings UI (separate process from the daemon)."""
+    from utter.ui import tui
+
+    tui.run()
+
+
+def _first_run_wizard() -> None:
+    """Short terminal setup on first launch (BUILD_PLAN §8 first-run flow)."""
+    from utter.core import config as config_store
+    from utter.core.config import Config
+    from utter.hotkey import parse_combo
+    from utter.paths import config_path
+
+    if config_path().exists():
+        return
+    typer.echo("First run — quick setup (press Enter to accept defaults).")
+    cfg = Config()
+    def _clean(s: str) -> str:
+        return s.strip().lstrip("﻿")
+
+    cfg.model.name = _clean(
+        typer.prompt(
+            "Model size (tiny/base/small/medium/large-v3; larger = more accurate,"
+            " bigger download)",
+            default=cfg.model.name,
+        )
+    )
+    cfg.model.device = _clean(typer.prompt("Device (cuda/cpu/auto)", default=cfg.model.device))
+    while True:
+        combo = _clean(typer.prompt("Toggle hotkey", default=cfg.general.hotkey))
+        try:
+            parse_combo(combo)
+            cfg.general.hotkey = combo
+            break
+        except ValueError as exc:
+            typer.echo(f"  invalid hotkey: {exc}")
+    path = config_store.save(cfg)
+    typer.echo(f"Config written to {path}.")
+    typer.echo("Note: the first use of a new model size downloads weights from Hugging Face.")
+
+
+@app.command()
 def start() -> None:
     """Start the Utter daemon (hotkey listener + tray)."""
     from utter.logging_setup import setup
@@ -96,6 +139,7 @@ def start() -> None:
     if not guard.acquire():
         typer.echo("Utter is already running — refusing to start a second instance.", err=True)
         raise typer.Exit(code=1)
+    _first_run_wizard()
     from utter import app as utter_app
     from utter.core import config as config_store
 

@@ -97,8 +97,11 @@ def load(path: Path | None = None) -> Config:
     path = path or config_path()
     cfg = Config()
     if path.exists():
-        with open(path, "rb") as f:
-            _merge(cfg, tomllib.load(f))
+        data = path.read_bytes()
+        # tolerate a UTF-8 BOM — Notepad and PowerShell 5.1 write one, tomllib rejects it
+        if data.startswith(b"\xef\xbb\xbf"):
+            data = data[3:]
+        _merge(cfg, tomllib.loads(data.decode("utf-8")))
     return cfg
 
 
