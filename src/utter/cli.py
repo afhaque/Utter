@@ -96,10 +96,13 @@ def start() -> None:
     if not guard.acquire():
         typer.echo("Utter is already running — refusing to start a second instance.", err=True)
         raise typer.Exit(code=1)
+    from utter.core import config as config_store
+    from utter.daemon import Daemon
+
     try:
-        typer.echo("Utter daemon placeholder running (Ctrl+C to stop)...")
-        while True:  # replaced by the real daemon loop in later phases
-            time.sleep(1)
+        cfg = config_store.load()
+        typer.echo(f"Utter daemon starting (hotkey: {cfg.general.hotkey}, Ctrl+C to stop)...")
+        Daemon(cfg).run_forever()
     except KeyboardInterrupt:
         pass
     finally:
